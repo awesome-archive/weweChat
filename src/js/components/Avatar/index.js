@@ -1,8 +1,7 @@
 
-import React, { Component, PropTypes } from 'react';
-import clazz from 'classname';
+import React, { Component } from 'react';
+import PropTypes from 'prop-types';
 
-import blacklist from 'utils/blacklist';
 import './style.global.css';
 
 export default class Avatar extends Component {
@@ -12,11 +11,15 @@ export default class Avatar extends Component {
     };
 
     static defaultProps = {
-        fallback: 'http://i.pravatar.cc/200',
+        fallback: 'assets/images/user-fallback.png',
     };
 
     handleError(e) {
         e.target.src = this.props.fallback;
+    }
+
+    handleLoad(e) {
+        e.target.classList.remove('fadein');
     }
 
     render() {
@@ -24,10 +27,12 @@ export default class Avatar extends Component {
 
         return (
             <img
-                {...blacklist(this.props, 'fallback', 'className', 'onLoad', 'onError')}
-                className={clazz('Avatar', 'fade fadein', this.props.className)}
-                onLoad={e => e.target.classList.remove('fadein')}
-                onError={e => this.handleError(e)} />
+                className={`Avatar fade fadein ${this.props.className}`}
+                onClick={this.props.onClick}
+                onLoad={e => this.handleLoad(e)}
+                onError={e => this.handleError(e)}
+                src={this.props.src}
+            />
         );
     }
 }

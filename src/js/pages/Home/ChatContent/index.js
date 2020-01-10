@@ -9,6 +9,7 @@ import axios from 'axios';
 import classes from './style.css';
 import Avatar from 'components/Avatar';
 import helper from 'utils/helper';
+import { parser as emojiParse } from 'utils/emoji';
 import { on, off } from 'utils/event';
 
 @inject(stores => ({
@@ -20,6 +21,10 @@ import { on, off } from 'utils/event';
     loading: stores.session.loading,
     reset: () => {
         stores.chat.user = false;
+    },
+    isFriend: (id) => {
+        var user = stores.contacts.memberList.find(e => e.UserName === id) || {};
+        return helper.isContact(user);
     },
     showUserinfo: async(isme, user) => {
         var caniremove = helper.isChatRoomOwner(stores.chat.user);
@@ -75,6 +80,9 @@ import { on, off } from 'utils/event';
     showAddFriend: (user) => stores.addfriend.toggle(true, user),
     recallMessage: stores.chat.recallMessage,
     downloads: stores.settings.downloads,
+    rememberConversation: stores.settings.rememberConversation,
+    showConversation: stores.chat.showConversation,
+    toggleConversation: stores.chat.toggleConversation,
 }))
 @observer
 export default class ChatContent extends Component {
@@ -90,7 +98,7 @@ export default class ChatContent extends Component {
                     `;
                 }
                 // Text message
-                return message.Content;
+                return emojiParse(message.Content);
             case 3:
                 // Image
                 let image = message.image;
@@ -98,12 +106,12 @@ export default class ChatContent extends Component {
                 if (uploading) {
                     return `
                         <div>
-                            <img class="open-image unload" data-id="${message.MsgId}" src="${image.src}" />
+                            <img class="open-image unload" data-id="${message.MsgId}" src="${image.src}" data-fallback="${image.fallback}" />
                             <i class="icon-ion-android-arrow-up"></i>
                         </div>
                     `;
                 }
-                return `<img class="open-image unload" data-id="${message.MsgId}" src="${image.src}" />`;
+                return `<img class="open-image unload" data-id="${message.MsgId}" src="${image.src}" data-fallback="${image.fallback}" />`;
             case 34:
                 /* eslint-disable */
                 // Voice
@@ -130,11 +138,20 @@ export default class ChatContent extends Component {
                     </div>
                 `;
             case 47:
+            case 49 + 8:
                 // External emoji
                 let emoji = message.emoji;
 
                 if (emoji) {
-                    return `<img src="${emoji.src}" class="unload" />`;
+                    if (uploading) {
+                        return `
+                            <div>
+                                <img class="unload disabledDrag" src="${emoji.src}" data-fallback="${emoji.fallback}" />
+                                <i class="icon-ion-android-arrow-up"></i>
+                            </div>
+                        `;
+                    }
+                    return `<img src="${emoji.src}" class="unload disabledDrag" data-fallback="${emoji.fallback}" />`;
                 }
                 return `
                     <div class="${classes.invalidEmoji}">
@@ -146,9 +163,10 @@ export default class ChatContent extends Component {
             case 42:
                 // Contact Card
                 let contact = message.contact;
+                let isFriend = this.props.isFriend(contact.UserName);
                 let html = `
-                    <div class="${clazz(classes.contact, { 'is-friend': contact.isFriend })}" data-userid="${contact.UserName}">
-                        <img src="${contact.image}" class="unload" />
+                    <div class="${clazz(classes.contact, { 'is-friend': isFriend })}" data-userid="${contact.UserName}">
+                        <img src="${contact.image}" class="unload disabledDrag" />
 
                         <div>
                             <p>${contact.name}</p>
@@ -156,7 +174,7 @@ export default class ChatContent extends Component {
                         </div>
                 `;
 
-                if (!contact.isFriend) {
+                if (!isFriend) {
                     html += `
                         <i class="icon-ion-android-add" data-userid="${contact.UserName}"></i>
                     `;
@@ -177,6 +195,14 @@ export default class ChatContent extends Component {
 
                             <i class="icon-ion-android-arrow-up"></i>
                         </div>
+                    `;
+                }
+
+                if (!video) {
+                    console.error('Invalid video message: %o', message);
+
+                    return `
+                        Receive an invalid video message, please see the console output.
                     `;
                 }
 
@@ -204,7 +230,7 @@ export default class ChatContent extends Component {
                 /* eslint-disable */
                 return `
                     <div class="${classes.file}" data-id="${message.MsgId}">
-                        <img src="assets/images/filetypes/${helper.getFiletypeIcon(file.extension)}" />
+                        <img src="assets/images/filetypes/${helper.getFiletypeIcon(file.extension)}" class="disabledDrag" />
 
                         <div>
                             <p>${file.name}</p>
@@ -263,7 +289,7 @@ export default class ChatContent extends Component {
                     [classes.isText]: type === 1 && !message.location,
                     [classes.isLocation]: type === 1 && message.location,
                     [classes.isImage]: type === 3,
-                    [classes.isEmoji]: type === 47,
+                    [classes.isEmoji]: type === 47 || type === 49 + 8,
                     [classes.isVoice]: type === 34,
                     [classes.isContact]: type === 42,
                     [classes.isVideo]: type === 43,
@@ -278,7 +304,13 @@ export default class ChatContent extends Component {
                         <Avatar
                             src={message.isme ? message.HeadImgUrl : user.HeadImgUrl}
                             className={classes.avatar}
-                            onClick={ev => this.props.showUserinfo(message.isme, user)} />
+                            onClick={ev => this.props.showUserinfo(message.isme, user)}
+                        />
+
+                        <p
+                            className={classes.username}
+                            dangerouslySetInnerHTML={{__html: user.DisplayName || user.RemarkName || user.NickName}}
+                        />
 
                         <div className={classes.content}>
                             <p
@@ -301,9 +333,13 @@ export default class ChatContent extends Component {
             && target.classList.contains('open-image')) {
             // Get image from cache and convert to base64
             let response = await axios.get(target.src, { responseType: 'arraybuffer' });
+            // eslint-disable-next-line
             let base64 = new window.Buffer(response.data, 'binary').toString('base64');
 
-            ipcRenderer.send('open-image', target.dataset, base64);
+            ipcRenderer.send('open-image', {
+                dataset: target.dataset,
+                base64,
+            });
 
             return;
         }
@@ -323,7 +359,9 @@ export default class ChatContent extends Component {
         // Open the location
         if (target.tagName === 'IMG'
             && target.classList.contains('open-map')) {
-            ipcRenderer.send('open-map', target.dataset.map);
+            ipcRenderer.send('open-map', {
+                map: target.dataset.map,
+            });
         }
 
         // Show contact card
@@ -360,6 +398,7 @@ export default class ChatContent extends Component {
             && target.classList.contains('is-download')) {
             let message = this.props.getMessage(e.target.parentElement.dataset.id);
             let response = await axios.get(message.file.download, { responseType: 'arraybuffer' });
+            // eslint-disable-next-line
             let base64 = new window.Buffer(response.data, 'binary').toString('base64');
             let filename = ipcRenderer.sendSync(
                 'file-download',
@@ -440,6 +479,15 @@ export default class ChatContent extends Component {
         var user = this.props.user;
         var menu = new remote.Menu.buildFromTemplate([
             {
+                label: 'Toggle the conversation',
+                click: () => {
+                    this.props.toggleConversation();
+                }
+            },
+            {
+                type: 'separator',
+            },
+            {
                 label: 'Empty Content',
                 click: () => {
                     this.props.empty(user);
@@ -488,8 +536,15 @@ export default class ChatContent extends Component {
         }
     }
 
+    scrollBottomWhenSentMessage() {
+        var { user, messages } = this.props;
+        var list = messages.get(user.id);
+
+        return list.slice(-1).isme;
+    }
+
     componentWillUnmount() {
-        this.props.reset();
+        !this.props.rememberConversation && this.props.reset();
     }
 
     componentDidUpdate() {
@@ -497,8 +552,17 @@ export default class ChatContent extends Component {
         var tips = this.refs.tips;
 
         if (viewport) {
-            var images = viewport.querySelectorAll('img.unload');
+            let newestMessage = this.props.messages.get(this.props.user.UserName).data.slice(-1)[0];
+            let images = viewport.querySelectorAll('img.unload');
 
+            // Scroll to bottom when you sent message
+            if (newestMessage
+                    && newestMessage.isme) {
+                viewport.scrollTop = viewport.scrollHeight;
+                return;
+            }
+
+            // Show the unread messages count
             if (viewport.scrollTop < this.scrollTop) {
                 let counter = viewport.querySelectorAll(`.${classes.message}.unread`).length;
 
@@ -509,6 +573,7 @@ export default class ChatContent extends Component {
                 return;
             }
 
+            // Auto scroll to bottom when message has been loaded
             Array.from(images).map(e => {
                 on(e, 'load', ev => {
                     off(e, 'load');
@@ -516,12 +581,27 @@ export default class ChatContent extends Component {
                     viewport.scrollTop = viewport.scrollHeight;
                     this.scrollTop = viewport.scrollTop;
                 });
+
+                on(e, 'error', ev => {
+                    var fallback = ev.target.dataset.fallback;
+
+                    if (fallback === 'undefined') {
+                        fallback = 'assets/images/broken.png';
+                    }
+
+                    ev.target.src = fallback;
+                    ev.target.removeAttribute('data-fallback');
+
+                    off(e, 'error');
+                });
             });
 
+            // Hide the unread message count
             tips.classList.remove(classes.show);
             viewport.scrollTop = viewport.scrollHeight;
             this.scrollTop = viewport.scrollTop;
 
+            // Mark message has been loaded
             Array.from(viewport.querySelectorAll(`.${classes.message}.unread`)).map(e => e.classList.remove('unread'));
         }
     }
@@ -535,48 +615,63 @@ export default class ChatContent extends Component {
     }
 
     render() {
-        var { loading, user, messages } = this.props;
+        var { loading, showConversation, user, messages } = this.props;
         var title = user.RemarkName || user.NickName;
         var signature = user.Signature;
 
         if (loading) return false;
 
         return (
-            <div className={clazz(classes.container, { [classes.notfound]: !user })} onClick={e => this.handleClick(e)}>
+            <div
+                className={clazz(classes.container, {
+                    [classes.hideConversation]: !showConversation,
+                })}
+                onClick={e => this.handleClick(e)}>
                 {
                     user ? (
                         <div>
                             <header>
                                 <div className={classes.info}>
-                                    <p title={title} dangerouslySetInnerHTML={{__html: title}} />
+                                    <p
+                                        dangerouslySetInnerHTML={{__html: title}}
+                                        title={title} />
 
                                     <span
-                                        title={signature}
                                         className={classes.signature}
+                                        dangerouslySetInnerHTML={{__html: signature || 'No Signature'}}
                                         onClick={e => this.props.showMembers(user)}
-                                        dangerouslySetInnerHTML={{__html: signature || 'No Signature'}} />
+                                        title={signature} />
                                 </div>
 
-                                <i className="icon-ion-android-more-vertical" onClick={() => this.showMenu()} />
+                                <i
+                                    className="icon-ion-android-more-vertical"
+                                    onClick={() => this.showMenu()} />
                             </header>
 
-                            <div className={classes.messages} ref="viewport" onScroll={e => this.handleScroll(e)}>
+                            <div
+                                className={classes.messages}
+                                onScroll={e => this.handleScroll(e)}
+                                ref="viewport">
                                 {
                                     this.renderMessages(messages.get(user.UserName), user)
                                 }
                             </div>
                         </div>
                     ) : (
-                        <div className={classes.inner}>
-                            <img src="assets/images/noselected.png" />
-                            <h1>No Chat selected.</h1>
+                        <div className={clazz({
+                            [classes.noselected]: !user,
+                        })}>
+                            <img
+                                className="disabledDrag"
+                                src="assets/images/noselected.png" />
+                            <h1>No Chat selected :(</h1>
                         </div>
                     )
                 }
 
                 <div
-                    ref="tips"
-                    className={classes.tips}>
+                    className={classes.tips}
+                    ref="tips">
                     Unread message.
                 </div>
             </div>

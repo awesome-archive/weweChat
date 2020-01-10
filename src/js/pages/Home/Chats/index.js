@@ -6,7 +6,6 @@ import clazz from 'classname';
 import moment from 'moment';
 
 import classes from './style.css';
-import Avatar from 'components/Avatar';
 import helper from 'utils/helper';
 
 moment.updateLocale('en', {
@@ -88,6 +87,22 @@ export default class Chats extends Component {
         menu.popup(remote.getCurrentWindow());
     }
 
+    componentDidUpdate() {
+        var container = this.refs.container;
+        var active = container.querySelector(`.${classes.chat}.${classes.active}`);
+
+        if (active) {
+            let rect4active = active.getBoundingClientRect();
+            let rect4viewport = container.getBoundingClientRect();
+
+            // Keep the conversation always in the viewport
+            if (!(rect4active.top >= rect4viewport.top
+                && rect4active.bottom <= rect4viewport.bottom)) {
+                active.scrollIntoViewIfNeeded();
+            }
+        }
+    }
+
     render() {
         var { loading, chats, selected, chatTo, searching } = this.props;
 
@@ -95,7 +110,9 @@ export default class Chats extends Component {
 
         return (
             <div className={classes.container}>
-                <div className={classes.chats}>
+                <div
+                    className={classes.chats}
+                    ref="container">
                     {
                         !searching && chats.map((e, index) => {
                             var message = this.getTheLastestMessage(e.UserName) || {};
@@ -116,13 +133,21 @@ export default class Chats extends Component {
                                             [classes.green]: !muted && this.hasUnreadMessage(e.UserName),
                                             [classes.red]: muted && this.hasUnreadMessage(e.UserName)
                                         })}>
-                                            <Avatar src={e.HeadImgUrl} />
+                                            <img
+                                                className="disabledDrag"
+                                                src={e.HeadImgUrl}
+                                                onError={e => (e.target.src = 'assets/images/user-fallback.png')}
+                                            />
                                         </div>
 
                                         <div className={classes.info}>
-                                            <p className={classes.username} dangerouslySetInnerHTML={{__html: e.RemarkName || e.NickName}} />
+                                            <p
+                                                className={classes.username}
+                                                dangerouslySetInnerHTML={{__html: e.RemarkName || e.NickName}} />
 
-                                            <span className={classes.message} dangerouslySetInnerHTML={{__html: helper.getMessageContent(message) || 'No Message'}} />
+                                            <span
+                                                className={classes.message}
+                                                dangerouslySetInnerHTML={{__html: helper.getMessageContent(message) || 'No Message'}} />
                                         </div>
                                     </div>
 

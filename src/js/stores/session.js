@@ -3,9 +3,13 @@
 import axios from 'axios';
 import { observable, action } from 'mobx';
 
+import helper from 'utils/helper';
 import storage from 'utils/storage';
+import { normalize } from 'utils/emoji';
 import chat from './chat';
 import contacts from './contacts';
+
+const CancelToken = axios.CancelToken;
 
 class Session {
     @observable loading = true;
@@ -21,7 +25,7 @@ class Session {
     }
 
     @action async getCode() {
-        var response = await axios.get('https://login.wx.qq.com/jslogin?appid=wx782c26e4c19acffb&redirect_uri=https%3A%2F%2Fwx.qq.com%2Fcgi-bin%2Fmmwebwx-bin%2Fwebwxnewloginpage&fun=new&lang=en_US&_=1499075647264');
+        var response = await axios.get('https://login.wx.qq.com/jslogin?appid=wx782c26e4c19acffb&redirect_uri=https%3A%2F%2Fwx.qq.com%2Fcgi-bin%2Fmmwebwx-bin%2Fwebwxnewloginpage&fun=new&lang=en_US&_=' + +new Date());
         var code = response.data.match(/[A-Za-z_\-\d]{10}==/)[0];
 
         self.code = code;
@@ -33,12 +37,13 @@ class Session {
         // Already logined
         if (self.auth) return;
 
-        var response = await axios.get('https://login.web.wechat.com/cgi-bin/mmwebwx-bin/login', {
+        var response = await axios.get('https://login.wx.qq.com/cgi-bin/mmwebwx-bin/login', {
             params: {
                 loginicon: true,
                 uuid: self.code,
                 tip: 0,
-                r: +new Date(),
+                r: ~new Date(),
+                _: +new Date(),
             }
         });
 
@@ -62,18 +67,25 @@ class Session {
                         version: 'v2',
                     }
                 });
-                let auth = {
-                    baseURL: axios.defaults.baseURL,
-                    skey: response.data.match(/<skey>(.*?)<\/skey>/)[1],
-                    passTicket: response.data.match(/<pass_ticket>(.*?)<\/pass_ticket>/)[1],
-                    wxsid: response.data.match(/<wxsid>(.*?)<\/wxsid>/)[1],
-                    wxuin: response.data.match(/<wxuin>(.*?)<\/wxuin>/)[1],
-                };
+                let auth = {};
+
+                try {
+                    auth = {
+                        baseURL: axios.defaults.baseURL,
+                        skey: response.data.match(/<skey>(.*?)<\/skey>/)[1],
+                        passTicket: response.data.match(/<pass_ticket>(.*?)<\/pass_ticket>/)[1],
+                        wxsid: response.data.match(/<wxsid>(.*?)<\/wxsid>/)[1],
+                        wxuin: response.data.match(/<wxuin>(.*?)<\/wxuin>/)[1],
+                    };
+                } catch (ex) {
+                    window.alert('Your login may be compromised. For account security, you cannot log in to Web WeChat. You can try mobile WeChat or Windows WeChat.');
+                    window.location.reload();
+                }
 
                 self.auth = auth;
                 await storage.set('auth', auth);
                 await self.initUser();
-                self.keepalive();
+                self.keepalive().catch(ex => self.logout());
                 break;
 
             case 201:
@@ -118,7 +130,6 @@ class Session {
         self.user.ContactList.map(e => {
             e.HeadImgUrl = `${axios.defaults.baseURL}${e.HeadImgUrl.substr(1)}`;
         });
-        self.user.User.HeadImgUrl = `${axios.defaults.baseURL}${self.user.User.HeadImgUrl.substr(1)}`;
         await contacts.getContats();
         await chat.loadChats(self.user.ChatSet);
 
@@ -142,9 +153,23 @@ class Session {
         self.user.SyncKey = response.data.SyncCheckKey;
         self.genSyncKey(response.data.SyncCheckKey.List);
 
-        // Get the new friend
+        // Get the new friend, or chat room has change
         response.data.ModContactList.map(e => {
-            mods.push(e.UserName);
+            var hasUser = contacts.memberList.find(user => user.UserName === e.UserName);
+
+            if (hasUser) {
+                // Just update the user
+                contacts.updateUser(e);
+            } else {
+                // If user not exists put it in batch list
+                mods.push(e.UserName);
+            }
+        });
+
+        // Delete user
+        response.data.DelContactList.map((e) => {
+            contacts.deleteUser(e.UserName);
+            chat.removeChat(e);
         });
 
         if (mods.length) {
@@ -152,16 +177,47 @@ class Session {
         }
 
         response.data.AddMsgList.map(e => {
-            if (e.FromUserName === self.user.User.UserName) {
-                return chat.markedRead(e.ToUserName);
+            var from = e.FromUserName;
+            var to = e.ToUserName;
+            var fromYourPhone = from === self.user.User.UserName && from !== to;
+
+            // When message has been readed on your phone, will receive this message
+            if (e.MsgType === 51) {
+                return chat.markedRead(fromYourPhone ? from : to);
             }
 
-            if (e.FromUserName.startsWith('@')) {
+            e.Content = normalize(e.Content);
+
+            // Sync message from your phone
+            if (fromYourPhone) {
+                // Message is sync from your phone
+                chat.addMessage(e, true);
+                return;
+            }
+
+            if (from.startsWith('@')) {
                 chat.addMessage(e);
             }
         });
 
         return response.data;
+    }
+
+    // A callback for cancel the sync request
+    cancelCheck = window.Function;
+
+    checkTimeout(weakup) {
+        // Kill the zombie request or duplicate request
+        self.cancelCheck();
+        clearTimeout(self.checkTimeout.timer);
+
+        if (helper.isSuspend() || weakup) {
+            return;
+        }
+
+        self.checkTimeout.timer = setTimeout(() => {
+            self.cancelCheck();
+        }, 30 * 1000);
     }
 
     async keepalive() {
@@ -177,7 +233,14 @@ class Session {
         });
         var host = axios.defaults.baseURL.replace('//', '//webpush.');
         var loop = async() => {
+            // Start detect timeout
+            self.checkTimeout();
+
             var response = await axios.get(`${host}cgi-bin/mmwebwx-bin/synccheck`, {
+                cancelToken: new CancelToken(exe => {
+                    // An executor function receives a cancel function as a parameter
+                    this.cancelCheck = exe;
+                }),
                 params: {
                     r: +new Date(),
                     sid: auth.wxsid,
@@ -185,53 +248,50 @@ class Session {
                     skey: auth.skey,
                     synckey: self.syncKey,
                 }
+            }).catch(ex => {
+                if (axios.isCancel(ex)) {
+                    loop();
+                } else {
+                    self.logout();
+                }
             });
+
+            if (!response) {
+                // Request has been canceled
+                return;
+            }
 
             eval(response.data);
 
             if (+window.synccheck.retcode === 0) {
-                if ([
-                    // Normal synccheck
-                    0,
-                    // Has new message need sync
-                    2,
-                    // You got a new friend
-                    6,
-                    // Unknow
-                    4,
-                ].includes(+window.synccheck.selector)) {
-                    var selector = +window.synccheck.selector;
+                // 2, Has new message
+                // 6, New friend
+                // 4, Conversation refresh ?
+                // 7, Exit or enter
+                let selector = +window.synccheck.selector;
 
-                    if (selector !== 0) {
-                        await self.getNewMessage();
-                    }
+                if (selector !== 0) {
+                    await self.getNewMessage();
                 }
 
                 // Do next sync keep your wechat alive
-                try {
-                    if (await loop() === false) {
-                        self.relogin();
-                    }
-                } catch (ex) {
-                    self.relogin();
-                }
-
-                return true;
+                return loop();
             } else {
-                return false;
+                self.logout();
             }
         };
 
-        response.data.AddMsgList.map(async e => {
-            await chat.loadChats(e.StatusNotifyUserName);
-        });
+        // Load the rencets chats
+        response.data.AddMsgList.map(
+            async e => {
+                await chat.loadChats(e.StatusNotifyUserName);
+            }
+        );
 
         self.loading = false;
         self.genSyncKey(response.data.SyncCheckKey.List);
 
-        if (await loop() === false) {
-            throw window.synccheck;
-        }
+        return loop();
     }
 
     @action async hasLogin() {
@@ -242,8 +302,8 @@ class Session {
         self.auth = auth && Object.keys(auth).length ? auth : void 0;
 
         if (self.auth) {
-            await self.initUser().catch(ex => self.relogin());
-            self.keepalive().catch(ex => self.relogin());
+            await self.initUser().catch(ex => self.logout());
+            self.keepalive().catch(ex => self.logout());
         }
 
         return auth;
@@ -252,14 +312,17 @@ class Session {
     @action async logout() {
         var auth = self.auth;
 
-        await axios.post(`/cgi-bin/mmwebwx-bin/webwxlogout?skey=${auth.skey}&redirect=0&type=1`, {
-            sid: auth.sid,
-            uin: auth.uid,
-        });
-        self.relogin();
+        try {
+            await axios.post(`/cgi-bin/mmwebwx-bin/webwxlogout?skey=${auth.skey}&redirect=0&type=1`, {
+                sid: auth.sid,
+                uin: auth.uid,
+            });
+        } finally {
+            self.exit();
+        }
     }
 
-    async relogin() {
+    async exit() {
         await storage.remove('auth');
         window.location.reload();
     }

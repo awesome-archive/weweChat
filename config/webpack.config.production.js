@@ -1,6 +1,7 @@
 
 import path from 'path';
 import webpack from 'webpack';
+import MinifyPlugin from 'babel-minify-webpack-plugin';
 import config from './index';
 import HtmlWebpackPlugin from 'html-webpack-plugin';
 import CopyWebpackPlugin from 'copy-webpack-plugin';
@@ -10,7 +11,8 @@ export default {
 
     ...baseConfig,
 
-    devtool: 'cheap-module-source-map',
+    mode: 'production',
+    devtool: false,
 
     entry: [
         'babel-polyfill',
@@ -23,15 +25,13 @@ export default {
     },
 
     plugins: [
+        // https://github.com/webpack/webpack/issues/2545
+        // Use babel-minify-webpack-plugin minify code
+        new MinifyPlugin(),
+
         // https://webpack.github.io/docs/list-of-plugins.html#occurrenceorderplugin
         // https://github.com/webpack/webpack/issues/864
         new webpack.optimize.OccurrenceOrderPlugin(),
-
-        // NODE_ENV should be production so that modules do not perform certain development checks
-        new webpack.DefinePlugin({
-            DEBUG: false,
-            'process.env.NODE_ENV': JSON.stringify('production')
-        }),
 
         new CopyWebpackPlugin([
             {

@@ -1,10 +1,14 @@
 
 import { observable, action } from 'mobx';
+import { ipcRenderer } from 'electron';
 import axios from 'axios';
 import pinyin from 'han';
 
+import session from './session';
+import chat from './chat';
 import storage from 'utils/storage';
 import helper from 'utils/helper';
+import { normalize } from 'utils/emoji';
 
 class Contacts {
     @observable loading = false;
@@ -15,7 +19,7 @@ class Contacts {
         result: [],
     };
 
-    @action group(list) {
+    @action group(list, showall = false) {
         var mappings = {};
         var sorted = [];
 
@@ -24,7 +28,13 @@ class Contacts {
                 return;
             }
 
-            var prefix = ((e.RemarkPYInitial || e.PYInitial).toString()[0] + '').replace('?', '#');
+            // If 'showall' is false, just show your friends
+            if (showall === false
+                && !helper.isContact(e)) {
+                return;
+            }
+
+            var prefix = ((e.RemarkPYInitial || e.PYInitial || pinyin.letter(e.NickName)).toString()[0] + '').replace('?', '#');
             var group = mappings[prefix];
 
             if (!group) {
@@ -60,6 +70,7 @@ class Contacts {
         self.loading = true;
 
         var auth = await storage.get('auth');
+        var me = session.user.User;
         var response = await axios.get('/cgi-bin/mmwebwx-bin/webwxgetcontact', {
             params: {
                 r: +new Date(),
@@ -68,11 +79,11 @@ class Contacts {
             }
         });
 
-        // Remove all official account
-        self.memberList = response.data.MemberList.filter(e => !helper.isOfficial(e) && !helper.isBrand(e));
+        // Remove all official account and brand account
+        self.memberList = response.data.MemberList.filter(e => helper.isContact(e) && !helper.isOfficial(e) && !helper.isBrand(e)).concat(me);
         self.memberList.map(e => {
-            e.HeadImgUrl = `${axios.defaults.baseURL}${e.HeadImgUrl.substr(1)}`;
-            e.isFriend = true;
+            e.MemberList = [];
+            return self.resolveUser(auth, e);
         });
 
         self.loading = false;
@@ -81,8 +92,52 @@ class Contacts {
         return (window.list = self.memberList);
     }
 
+    resolveUser(auth, user) {
+        if (helper.isOfficial(user)
+            && !helper.isFileHelper(user)) {
+            // Skip the official account
+            return;
+        }
+
+        if (helper.isBrand(user)
+            && !helper.isFileHelper(user)) {
+            // Skip the brand account, eg: JD.COM
+            return;
+        }
+
+        if (helper.isChatRoomRemoved(user)
+            && !helper.isFileHelper(user)) {
+            // Chat room has removed
+            return;
+        }
+
+        if (helper.isChatRoom(user.UserName)) {
+            let placeholder = user.MemberList.map(e => e.NickName).join(',');
+
+            if (user.NickName) {
+                user.Signature = placeholder;
+            } else {
+                user.NickName = placeholder;
+                user.Signature = placeholder;
+            }
+        }
+
+        user.NickName = normalize(user.NickName);
+        user.RemarkName = normalize(user.RemarkName);
+        user.Signature = normalize(user.Signature);
+
+        user.HeadImgUrl = `${axios.defaults.baseURL}${user.HeadImgUrl.substr(1)}`;
+        user.MemberList.map(e => {
+            e.NickName = normalize(e.NickName);
+            e.RemarkName = normalize(e.RemarkName);
+            e.HeadImgUrl = `${axios.defaults.baseURL}cgi-bin/mmwebwx-bin/webwxgeticon?username=${e.UserName}&chatroomid=${user.EncryChatRoomId}&skey=${auth.skey}&seq=0`;
+        });
+
+        return user;
+    }
+
     // Batch get the contacts
-    async batch(list, isFriend = false) {
+    async batch(list) {
         var auth = await storage.get('auth');
         var response = await axios.post(`/cgi-bin/mmwebwx-bin/webwxbatchgetcontact?type=ex&r=${+new Date()}`, {
             BaseRequest: {
@@ -98,61 +153,45 @@ class Contacts {
         });
 
         if (response.data.BaseResponse.Ret === 0) {
+            var shouldUpdate = false;
+
             response.data.ContactList.map(e => {
                 var index = self.memberList.findIndex(user => user.UserName === e.UserName);
+                var user = self.resolveUser(auth, e);
 
-                if (helper.isOfficial(e)) {
-                    // Skip the official account
-                    return;
-                }
+                if (!user) return;
 
-                if (helper.isBrand(e)) {
-                    // Skip the brand account, eg: JD.COM
-                    return;
-                }
-
-                if (helper.isChatRoomRemoved(e)) {
-                    // Chat room has removed
-                    return;
-                }
-
-                if (helper.isChatRoom(e.UserName)) {
-                    let placeholder = e.MemberList.map(e => e.NickName).join(',');
-
-                    if (e.NickName) {
-                        e.Signature = placeholder;
-                    } else {
-                        e.NickName = placeholder;
-                        e.Signature = placeholder;
-                    }
-                }
-
-                e.isFriend = isFriend;
-                e.HeadImgUrl = `${axios.defaults.baseURL}${e.HeadImgUrl.substr(1)}`;
-                e.MemberList.map(user => {
-                    user.HeadImgUrl = `${axios.defaults.baseURL}cgi-bin/mmwebwx-bin/webwxgeticon?username=${user.UserName}&chatroomid=${e.EncryChatRoomId}&skey=${auth.skey}&seq=0`;
-                });
+                shouldUpdate = true;
 
                 if (index !== -1) {
-                    self.memberList[index] = e;
+                    self.memberList[index] = user;
                 } else {
                     // This contact is not in your contact list, eg: Temprary chat room
-                    self.memberList.push(e);
+                    self.memberList.push(user);
                 }
             });
+
+            if (shouldUpdate) {
+                // Update contact in menu
+                ipcRenderer.send('menu-update', {
+                    contacts: JSON.stringify(self.memberList.filter(e => helper.isContact(e))),
+                    cookies: await helper.getCookie(),
+                });
+            }
         } else {
-            throw new Error('Failed to get chat room member');
+            throw new Error(`Failed to get user: ${list}`);
         }
 
         return response.data.ContactList;
     }
 
-    @action filter(text = '') {
+    @action filter(text = '', showall = false) {
+        text = pinyin.letter(text.toLocaleLowerCase());
         var list = self.memberList.filter(e => {
-            var res = (e.PYQuanPin + '').toLowerCase().indexOf(pinyin.letter(text.toLocaleLowerCase())) > -1;
+            var res = pinyin.letter(e.NickName).toLowerCase().indexOf(text) > -1;
 
-            if (e.RemarkPYQuanPin) {
-                res = res || (e.RemarkPYQuanPin + '').toLowerCase().indexOf(pinyin.letter(text.toLocaleLowerCase())) > -1;
+            if (e.RemarkName) {
+                res = res || pinyin.letter(e.RemarkName).toLowerCase().indexOf(text) > -1;
             }
 
             return res;
@@ -166,21 +205,46 @@ class Contacts {
 
         self.filtered = {
             query: text,
-            result: list.length ? self.group(list) : [],
+            result: list.length ? self.group(list, showall) : [],
         };
-
-        window.res = self.filtered;
     }
 
     @action toggleGroup(showGroup) {
         self.showGroup = showGroup;
     }
 
-    @action updateUser(user) {
-        var result = self.memberList.find(e => e.UserName === user.UserName);
+    @action async deleteUser(id) {
+        self.memberList = self.memberList.filter(e => e.UserName !== id);
 
-        if (result) {
-            Object.assign(result, user);
+        // Update contact in menu
+        ipcRenderer.send('menu-update', {
+            contacts: JSON.stringify(self.memberList.filter(e => helper.isContact(e))),
+            cookies: await helper.getCookie(),
+        });
+    }
+
+    @action async updateUser(user) {
+        var auth = await storage.get('auth');
+        var list = self.memberList;
+        var index = list.findIndex(e => e.UserName === user.UserName);
+        var chating = chat.user;
+
+        // Fix chat room miss user avatar
+        user.EncryChatRoomId = list[index]['EncryChatRoomId'];
+
+        user = self.resolveUser(auth, user);
+
+        // Prevent avatar cache
+        user.HeadImgUrl = user.HeadImgUrl.replace(/\?\d{13}$/, '') + `?${+new Date()}`;
+
+        if (index !== -1) {
+            if (chating
+                && user.UserName === chating.UserName) {
+                Object.assign(chating, user);
+            }
+
+            list[index] = user;
+            self.memberList.replace(list);
         }
     }
 }

@@ -5,7 +5,7 @@ import config from './index';
 export default {
 
     module: {
-        loaders: [
+        rules: [
             {
                 test: /\.jsx?$/,
                 loader: ['babel-loader', 'eslint-loader'],
@@ -13,7 +13,7 @@ export default {
             },
             {
                 test: /\.css$/,
-                exclude: [/icomoon\/style.css$/, /global.css$/],
+                exclude: [/icomoon\/style.css$/, /icomoon\\style.css$/, /global.css$/],
                 use: [
                     'style-loader',
                     {
@@ -45,7 +45,7 @@ export default {
                 ],
             },
             {
-                test: /icomoon\/style.css$/,
+                test: /icomoon(\/|\\)style.css$/,
                 use: [
                     'style-loader',
                     'css-loader',
@@ -59,8 +59,8 @@ export default {
                 ],
             },
             {
-                test: /\.json$/,
-                loader: 'json-loader',
+                test: /\.html/,
+                loader: 'html-loader',
             },
             {
                 test: /\.woff(\?.*)?$/,
@@ -72,19 +72,19 @@ export default {
             },
             {
                 test: /\.otf(\?.*)?$/,
-                loader: 'file-loader?prefix=fonts/&name=[path][name].[ext]&limit=40000&mimetype=font/opentype',
+                loader: 'url-loader?prefix=fonts/&name=[path][name].[ext]&limit=40000&mimetype=font/opentype',
             },
             {
                 test: /\.ttf(\?.*)?$/,
                 loader: 'url-loader?prefix=fonts/&name=[path][name].[ext]&limit=40000&mimetype=application/octet-stream',
             },
             {
-                test: /\.eot(\?.*)?$/,
-                loader: 'file-loader?prefix=fonts/&name=[path][name].[ext]',
-            },
-            {
                 test: /\.svg(\?.*)?$/,
                 loader: 'url-loader?prefix=fonts/&name=[path][name].[ext]&limit=40000&mimetype=image/svg+xml',
+            },
+            {
+                test: /\.eot(\?.*)?$/,
+                loader: 'url-loader?prefix=fonts/&name=[path][name].[ext]&limit=40000',
             },
             {
                 test: /\.(png|jpg|jpeg|gif)$/,

@@ -9,8 +9,10 @@ import forward from './forward';
 import userinfo from './userinfo';
 import contacts from './contacts';
 import search from './search';
+import batchsend from './batchsend';
 import settings from './settings';
 import snackbar from './snackbar';
+import confirmImagePaste from './confirmImagePaste';
 
 const stores = {
     session,
@@ -21,10 +23,12 @@ const stores = {
     userinfo,
     contacts,
     search,
+    batchsend,
     settings,
     members,
     forward,
     snackbar,
+    confirmImagePaste,
 };
 
 export default stores;

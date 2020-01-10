@@ -19,7 +19,9 @@ export default class Login extends Component {
         return (
             <div className={classes.inner}>
                 {
-                    <img src={this.props.avatar} />
+                    <img
+                        className="disabledDrag"
+                        src={this.props.avatar} />
                 }
 
                 <p>Scan successful</p>
@@ -34,8 +36,10 @@ export default class Login extends Component {
         return (
             <div className={classes.inner}>
                 {
-                    code && (<img src={`https://login.weixin.qq.com/qrcode/${code}`} />)
+                    code && (<img className="disabledDrag" src={`https://login.weixin.qq.com/qrcode/${code}`} />)
                 }
+
+                <a href={window.location.pathname + '?' + +new Date()}>Refresh the QR Code</a>
 
                 <p>Scan to log in to WeChat</p>
                 <p>Log in on phone to use WeChat on Web</p>

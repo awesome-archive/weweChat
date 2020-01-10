@@ -6,13 +6,15 @@ import { ipcRenderer } from 'electron';
 import storage from 'utils/storage';
 import helper from 'utils/helper';
 import contacts from './contacts';
+import settings from './settings';
 import session from './session';
 import members from './members';
+import snackbar from './snackbar';
 
 async function resolveMessage(message) {
     var auth = await storage.get('auth');
     var isChatRoom = helper.isChatRoom(message.FromUserName);
-    var content = isChatRoom ? message.Content.split(':<br/>')[1] : message.Content;
+    var content = (isChatRoom && !message.isme) ? message.Content.split(':<br/>')[1] : message.Content;
 
     switch (message.MsgType) {
         case 1:
@@ -22,7 +24,7 @@ async function resolveMessage(message) {
                 let parts = message.Content.split(':<br/>');
                 let location = helper.parseKV(message.OriContent);
 
-                location.image = `${axios.defaults.baseURL}${parts[isChatRoom ? 2 : 1]}`.replace(/\/+/g, '/');
+                location.image = `${axios.defaults.baseURL}${parts[1]}`.replace(/\/+/g, '/');
                 location.href = message.Url;
 
                 message.location = location;
@@ -30,14 +32,14 @@ async function resolveMessage(message) {
             break;
         case 3:
             // Image
-            let image = helper.parseKV(content);
+            let image = {};
             image.src = `${axios.defaults.baseURL}cgi-bin/mmwebwx-bin/webwxgetmsgimg?&msgid=${message.MsgId}&skey=${auth.skey}`;
             message.image = image;
             break;
 
         case 34:
             // Voice
-            let voice = helper.parseKV(content);
+            let voice = {};
             voice.src = `${axios.defaults.baseURL}cgi-bin/mmwebwx-bin/webwxgetvoice?&msgid=${message.MsgId}&skey=${auth.skey}`;
             message.voice = voice;
             break;
@@ -46,10 +48,12 @@ async function resolveMessage(message) {
             // External emoji
             if (!content) break;
 
-            let emoji = helper.parseKV(content);
+            {
+                let emoji = helper.parseKV(content);
 
-            emoji.src = `${axios.defaults.baseURL}cgi-bin/mmwebwx-bin/webwxgetmsgimg?&msgid=${message.MsgId}&skey=${auth.skey}`;
-            message.emoji = emoji;
+                emoji.src = `${axios.defaults.baseURL}cgi-bin/mmwebwx-bin/webwxgetmsgimg?&msgid=${message.MsgId}&skey=${auth.skey}`;
+                message.emoji = emoji;
+            }
             break;
 
         case 42:
@@ -59,7 +63,6 @@ async function resolveMessage(message) {
             contact.image = `${axios.defaults.baseURL}cgi-bin/mmwebwx-bin/webwxgeticon?seq=0&username=${contact.UserName}&skey=${auth.skey}&msgid=${message.MsgId}`;
             contact.name = contact.NickName;
             contact.address = `${contact.Province || 'UNKNOW'}, ${contact.City || 'UNKNOW'}`;
-            contact.isFriend = !!contacts.memberList.find(e => e.UserName === contact.UserName);
             message.contact = contact;
             break;
 
@@ -77,12 +80,13 @@ async function resolveMessage(message) {
             switch (message.AppMsgType) {
                 case 2000:
                     // Transfer
-                    let { value } = helper.parseXml(message.Content, 'des');
+                    let res = helper.parseXml(message.Content, 'des');
+                    let value = (res.value || {}).des;
 
                     message.MsgType += 2000;
                     message.transfer = {
                         desc: value,
-                        money: +value.match(/[\d.]+元/)[0].slice(0, -1),
+                        money: +(value.match(/[\d.]+元/)[0].slice(0, -1)),
                     };
                     break;
 
@@ -111,6 +115,19 @@ async function resolveMessage(message) {
                     };
                     break;
 
+                case 8:
+                    // Animated emoji
+                    if (!content) break;
+
+                    {
+                        let emoji = helper.parseKV(content) || {};
+
+                        emoji.src = `${axios.defaults.baseURL}cgi-bin/mmwebwx-bin/webwxgetmsgimg?&msgid=${message.MsgId}&skey=${auth.skey}&type=big`;
+                        message.MsgType += 8;
+                        message.emoji = emoji;
+                    }
+                    break;
+
                 default:
                     console.error('Unknow app message: %o', Object.assign({}, message));
                     message.Content = `收到一条暂不支持的消息类型，请在手机上查看（${message.FileName || 'No Title'}）。`;
@@ -120,18 +137,20 @@ async function resolveMessage(message) {
             break;
 
         case 10002:
+            // Recall message
             let text = isChatRoom ? message.Content.split(':<br/>').slice(-1).pop() : message.Content;
-            let { value } = helper.parseXml(text, 'replacemsg');
+            let { value } = helper.parseXml(text, ['replacemsg', 'msgid']);
 
-            message.Content = value;
+            if (!settings.blockRecall) {
+                self.deleteMessage(message.FromUserName, value.msgid);
+            }
+
+            message.Content = value.replacemsg;
             message.MsgType = 19999;
             break;
 
         case 10000:
             let userid = message.FromUserName;
-
-            // Chat room has been changed
-            await contacts.batch([userid]);
 
             // Refresh the current chat room info
             if (helper.isChatRoom(userid)) {
@@ -160,14 +179,34 @@ async function resolveMessage(message) {
 function hasUnreadMessage(messages) {
     var counter = 0;
 
-    messages.keys().map(e => {
-        var item = messages.get(e);
+    Array.from(messages.keys()).map(
+        e => {
+            var item = messages.get(e);
+            counter += (item.data.length - item.unread);
+        }
+    );
 
-        counter += (item.data.length - item.unread);
-    });
+    ipcRenderer.send(
+        'message-unread',
+        {
+            counter,
+        }
+    );
+}
 
-    ipcRenderer.send('unread-message', {
-        counter,
+async function updateMenus({ conversations = [], contacts = [] }) {
+    ipcRenderer.send('menu-update', {
+        conversations: conversations.map(e => ({
+            id: e.UserName,
+            name: e.RemarkName || e.NickName,
+            avatar: e.HeadImgUrl,
+        })),
+        contacts: contacts.map(e => ({
+            id: e.UserName,
+            name: e.RemarkName || e.NickName,
+            avatar: e.HeadImgUrl,
+        })),
+        cookies: await helper.getCookie(),
     });
 }
 
@@ -175,6 +214,11 @@ class Chat {
     @observable sessions = [];
     @observable messages = new Map();
     @observable user = false;
+    @observable showConversation = true;
+
+    @action toggleConversation(show = !self.showConversation) {
+        self.showConversation = show;
+    }
 
     @action async loadChats(chatSet) {
         var list = contacts.memberList;
@@ -225,7 +269,37 @@ class Chat {
         });
 
         self.sessions.replace(sorted);
+        updateMenus({
+            conversations: self.sessions.slice(0, 10),
+            contacts: contacts.memberList.filter(e => helper.isContact(e)),
+        });
         return res;
+    }
+
+    @action chatToPrev() {
+        var sessions = self.sessions;
+        var index = self.user ? sessions.findIndex(e => e.UserName === self.user.UserName) : 0;
+
+        --index;
+
+        if (index === -1) {
+            index = sessions.length - 1;
+        }
+
+        self.chatTo(sessions[index]);
+    }
+
+    @action chatToNext() {
+        var sessions = self.sessions;
+        var index = self.user ? sessions.findIndex(e => e.UserName === self.user.UserName) : -1;
+
+        ++index;
+
+        if (index === sessions.length) {
+            index = 0;
+        }
+
+        self.chatTo(sessions[index]);
     }
 
     @action chatTo(user, onTop) {
@@ -267,7 +341,7 @@ class Chat {
         hasUnreadMessage(self.messages);
     }
 
-    @action async addMessage(message) {
+    @action async addMessage(message, sync = false) {
         /* eslint-disable */
         var from = message.FromUserName;
         var user = await contacts.getUser(from);
@@ -277,7 +351,23 @@ class Chat {
         var normaled = [];
         /* eslint-enable */
 
-        // Check new message is already in the chat set
+        if (!user) {
+            return console.error('Got an invalid message: %o', message);
+        }
+
+        // Add the messages of your sent on phone to the chat sets
+        if (sync) {
+            list = self.messages.get(message.ToUserName);
+            from = message.ToUserName;
+            user = contacts.memberList.find(e => e.UserName === from);
+
+            message.isme = true;
+            message.HeadImgUrl = session.user.User.HeadImgUrl;
+            message.FromUserName = message.ToUserName;
+            message.ToUserName = user.UserName;
+        }
+
+        // User is already in the chat set
         if (list) {
             // Swap the chatset order
             let index = self.sessions.findIndex(e => e.UserName === from);
@@ -289,34 +379,39 @@ class Chat {
                     ...self.sessions.slice(index + 1, self.sessions.length)
                 ];
             } else {
-                // User not in chatset
+                // When user has removed should add to chat set
                 sessions = [user, ...self.sessions];
             }
 
             // Drop the duplicate message
             if (!list.data.find(e => e.NewMsgId === message.NewMsgId)) {
+                let title = user.RemarkName || user.NickName;
+
                 message = await resolveMessage(message);
 
-                if (!helper.isMuted(user)) {
-                    // Get the user avatar and use it as notifier icon
-                    let response = await axios.get(user.HeadImgUrl, { responseType: 'arraybuffer' });
-                    let base64 = new window.Buffer(response.data, 'binary').toString('base64');
-
-                    ipcRenderer.send('receive-message', {
-                        icon: base64,
-                        title: user.RemarkName || user.NickName,
-                        message: helper.getMessageContent(message),
+                if (!helper.isMuted(user)
+                    && !sync
+                    && settings.showNotification) {
+                    let notification = new window.Notification(title, {
+                        icon: user.HeadImgUrl,
+                        body: helper.getMessageContent(message),
+                        vibrate: [200, 100, 200],
                     });
+
+                    notification.onclick = () => {
+                        ipcRenderer.send('show-window');
+                    };
                 }
                 list.data.push(message);
             }
         } else {
-            // New friend has accepted
+            // User is not in chat set
             sessions = [user, ...self.sessions];
             list = {
                 data: [message],
                 unread: 0,
             };
+            self.messages.set(from, list);
         }
 
         if (self.user.UserName === from) {
@@ -337,9 +432,11 @@ class Chat {
         });
 
         self.sessions.replace([...stickyed, ...normaled]);
-        self.messages.set(from, list);
 
         hasUnreadMessage(self.messages);
+        updateMenus({
+            conversations: self.sessions.slice(0, 10),
+        });
     }
 
     @action async sendTextMessage(auth, message, isForward) {
@@ -387,14 +484,13 @@ class Chat {
                 Uin: auth.wxuin,
                 Skey: auth.skey,
             },
-            Msg: {
+            Msg: Object.assign({
                 FromUserName: message.from,
                 ToUserName: message.to,
                 ClientMsgId: message.ClientMsgId,
                 LocalID: message.LocalID,
                 Type: 47,
-                EMoticonMd5: message.emoji.md5,
-            },
+            }, message.file ? { MediaId: message.file.mediaId } : { EMoticonMd5: message.emoji.md5 }),
             Scene: 2,
         });
         var res = {
@@ -403,8 +499,14 @@ class Chat {
             item: Object.assign({}, message, {
                 isme: true,
                 MsgId: response.data.MsgID,
+                MsgType: 47,
                 CreateTime: +new Date() / 1000,
                 HeadImgUrl: session.user.User.HeadImgUrl,
+
+                emoji: {
+                    // Update the image src
+                    src: `${axios.defaults.baseURL}cgi-bin/mmwebwx-bin/webwxgetmsgimg?&msgid=${response.data.MsgID}&skey=${auth.skey}`
+                }
             }),
         };
 
@@ -428,8 +530,8 @@ class Chat {
                 FromUserName: message.from,
                 ToUserName: message.to,
                 ClientMsgId: message.ClientMsgId,
-                LocalID: message.LocalID,
                 MediaId: message.file.mediaId,
+                LocalID: '',
                 Type: 3,
             },
             Scene: isForward ? 2 : 0,
@@ -488,7 +590,8 @@ class Chat {
                 ToUserName: message.to,
                 ClientMsgId: message.ClientMsgId,
                 LocalID: message.LocalID,
-                MediaId: '',
+                MediaId: message.file.mediaId,
+                Signature: message.file.signature,
                 Type: 6,
             },
             Scene: isForward ? 2 : 0,
@@ -595,6 +698,7 @@ class Chat {
                 return false;
             }
         } catch (ex) {
+            console.error('Failed to send message: %o', ex);
             return false;
         }
 
@@ -606,7 +710,7 @@ class Chat {
             let list = transformMessages(payload.to, self.messages, item);
 
             if (!helper.isChatRoom(user.UserName)
-                && !user.isFriend) {
+                && !helper.isContact(user)) {
                 // The target is not your friend
                 list.data.push({
                     Content: `${user.sex ? 'She' : 'He'} is not your friend, <a class="add-friend" data-userid="${user.UserName}">Send friend request</a>`,
@@ -617,17 +721,99 @@ class Chat {
             self.markedRead(payload.to);
             self.messages.set(payload.to, list);
 
-            return true;
+            return list.data[list.data.length - 1];
         }
 
         return false;
     }
 
-    @action async upload(file) {
+    @action async process(file, user = self.user) {
+        var showMessage = snackbar.showMessage;
+
+        if (!file || file.size === 0) {
+            showMessage('You can\'t send an empty file.');
+            return false;
+        }
+
+        if (!file
+            || file.size >= 100 * 1024 * 1024) {
+            showMessage('Send file not allowed to exceed 100M.');
+            return false;
+        }
+
+        var { mediaId, signature, type, uploaderid } = await self.upload(file, user);
+        var res = await self.sendMessage(user, {
+            type,
+            file: {
+                name: file.name,
+                size: file.size,
+                mediaId,
+                signature,
+                extension: file.name.split('.').slice(-1).pop()
+            },
+        }, false, (to, messages, message) => {
+            // Sent success
+            var list = messages.get(to);
+            var item = list.data.find(e => e.uploaderid === uploaderid);
+
+            switch (type) {
+                case 3:
+                    // When the locale file has been deleted fallback to get from server
+                    item.image.fallback = message.image.src;
+
+                    // Image
+                    Object.assign(item, message, {
+                        uploading: false,
+
+                        // Avoid rerender
+                        image: item.image,
+                    });
+                    break;
+
+                case 47:
+                    // Set the fallback image
+                    item.emoji.fallback = message.emoji.src;
+
+                    // Emoji
+                    Object.assign(item, message, {
+                        uploading: false,
+
+                        emoji: item.emoji,
+                    });
+                    break;
+
+                case 43:
+                    // Video
+                    Object.assign(item, message, {
+                        uploading: false,
+                        video: {
+                            ...message.video,
+                            src: item.video.src,
+                        },
+                    });
+                    break;
+
+                default:
+                    Object.assign(item, message, {
+                        uploading: false,
+                    });
+            }
+
+            return list;
+        });
+
+        if (res === false) {
+            showMessage(`Failed to send ${file.name}.`);
+        }
+
+        return res;
+    }
+
+    @action async upload(file, user = self.user) {
         var id = (+new Date() * 1000) + Math.random().toString().substr(2, 4);
+        var md5 = await helper.md5(file);
         var auth = await storage.get('auth');
         var ticket = await helper.getCookie('webwx_data_ticket');
-        var formdata = new window.FormData();
         var server = axios.defaults.baseURL.replace(/https:\/\//, 'https://file.') + 'cgi-bin/mmwebwx-bin/webwxuploadmedia?f=json';
         var mediaType = helper.getMediaType(file.name.split('.').slice(-1).pop());
         var type = {
@@ -635,41 +821,88 @@ class Chat {
             'video': 43,
             'doc': 49 + 6,
         }[mediaType];
+        var chunks = Math.ceil(file.size / 524288);
+        var payment = {};
+        var process = async(index) => {
+            let formdata = new window.FormData();
+            let start = index * 524288;
+            let end = start + 524288;
+
+            formdata.append('id', `WU_FILE_${self.upload.counter}`);
+            formdata.append('name', file.name);
+            formdata.append('type', file.type);
+            formdata.append('lastModifieDate', new Date(file.lastModified).toString());
+            formdata.append('size', file.size);
+            formdata.append('mediatype', mediaType);
+            formdata.append('chunks', chunks);
+            formdata.append('chunk', index);
+            formdata.append('uploadmediarequest', JSON.stringify(Object.assign({
+                BaseRequest: {
+                    Sid: auth.wxsid,
+                    Uin: auth.wxuin,
+                    Skey: auth.skey,
+                },
+                ClientMediaId: id,
+                DataLen: file.size,
+                FromUserName: session.user.User.UserName,
+                ToUserName: user.UserName,
+                MediaType: 4,
+                StartPos: 0,
+                TotalLen: file.size,
+                FileMd5: md5,
+            }, file.size > 1048576 * 10 ? {
+                AESKey: payment.AESKey,
+                Signature: payment.Signature,
+            } : {})));
+            formdata.append('webwx_data_ticket', ticket);
+            formdata.append('pass_ticket', auth.passTicket);
+            formdata.append('filename', file.slice(start, end <= file.size ? end : file.size));
+
+            var response = await axios.post(server, formdata);
+            return response;
+        };
 
         // Increase the counter
-        self.upload.count = self.upload.count ? 0 : self.upload.count + 1;
+        self.upload.counter = self.upload.counter ? self.upload.counter + 1 : 0;
 
-        formdata.append('id', `WU_FILE_${self.upload.counter}`);
-        formdata.append('name', file.name);
-        formdata.append('type', file.type);
-        formdata.append('lastModifieDate', new Date(file.lastModifieDate).toString());
-        formdata.append('size', file.size);
-        formdata.append('mediatype', mediaType);
-        formdata.append('uploadmediarequest', JSON.stringify({
-            BaseRequest: {
-                Sid: auth.wxsid,
-                Uin: auth.wxuin,
-                Skey: auth.skey,
-            },
-            ClientMediaId: id,
-            DataLen: file.size,
-            FromUserName: session.user.User.UserName,
-            MediaType: 4,
-            StartPos: 0,
-            ToUserName: self.user.UserName,
-            TotalLen: file.size,
-        }));
-        formdata.append('webwx_data_ticket', ticket);
-        formdata.append('pass_ticket', auth.passTicket);
-        formdata.append('filename', file.slice(0, file.size));
+        type = file.name.toLowerCase().endsWith('.gif') ? 47 : type;
+        var uploaderid = self.addUploadPreview(file, type, user);
 
-        var uploaderid = self.addUploadPreview(file, type);
-        var response = await axios.post(server, formdata);
+        if (file.size > 1048576 * 10) {
+            let response = await axios.post('/cgi-bin/mmwebwx-bin/webwxcheckupload', {
+                BaseRequest: {
+                    Sid: auth.wxsid,
+                    Uin: auth.wxuin,
+                    Skey: auth.skey,
+                },
+                FileSize: file.size,
+                FileName: file.name,
+                FileMd5: md5,
+                FileType: 7,
+                FromUserName: session.user.User.UserName,
+                ToUserName: user.UserName,
+            });
+            let data = response.data;
 
-        if (response.data.BaseResponse.Ret === 0) {
+            if (data.BaseResponse.Ret === 0) {
+                payment.AESKey = data.AESKey;
+                payment.Signature = data.Signature;
+                payment.MediaId = data.MediaId;
+            }
+        }
+
+        var response;
+
+        for (let i = 0; !payment.MediaId && i < chunks; ++i) {
+            response = await process(i);
+        }
+
+        if (!response
+            || response.data.BaseResponse.Ret === 0) {
             return {
-                mediaId: response.data.MediaId,
                 type,
+                mediaId: payment.MediaId || response.data.MediaId,
+                signature: payment.Signature,
                 uploaderid,
             };
         }
@@ -677,10 +910,13 @@ class Chat {
         return false;
     }
 
-    @action addUploadPreview(file, type) {
-        var to = self.user.UserName;
-        var list = self.messages.get(to);
+    @action addUploadPreview(file, type, user = self.user) {
         var uploaderid = Math.random().toString();
+        var to = user.UserName;
+        var list = self.messages.get(to) || {
+            data: [],
+            unread: 0,
+        };
         var item = {
             isme: true,
             CreateTime: +new Date() / 1000,
@@ -695,7 +931,16 @@ class Chat {
                 Object.assign(item, {
                     image: {
                         // Use the local path
-                        src: file.path,
+                        src: file.path || file.name,
+                    },
+                });
+                break;
+
+            case 47:
+                Object.assign(item, {
+                    emoji: {
+                        // Use the local path
+                        src: file.path || file.name,
                     },
                 });
                 break;
@@ -768,6 +1013,11 @@ class Chat {
     @action markedRead(userid) {
         var list = self.messages.get(userid);
 
+        // Update the unread message need the chat in chat list
+        if (!self.sessions.map(e => e.UserName).includes(userid)) {
+            return;
+        }
+
         if (list) {
             list.unread = list.data.length;
         } else {
@@ -791,7 +1041,7 @@ class Chat {
             },
             CmdId: 3,
             OP: sticky,
-            RemarkName: '',
+            RemarkName: user.RemarkName || user.NickName,
             UserName: user.UserName
         });
         var sorted = [];
@@ -807,6 +1057,9 @@ class Chat {
             });
             self.sessions.replace(sorted);
 
+            updateMenus({
+                conversations: sorted.slice(0, 10)
+            });
             return true;
         }
 
@@ -816,6 +1069,10 @@ class Chat {
     @action removeChat(user) {
         var sessions = self.sessions.filter(e => e.UserName !== user.UserName);
         self.sessions.replace(sessions);
+
+        updateMenus({
+            conversations: sessions.slice(0, 10)
+        });
     }
 
     @action empty(user) {

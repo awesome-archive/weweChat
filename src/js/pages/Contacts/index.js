@@ -5,9 +5,9 @@ import clazz from 'classname';
 import randomColor from 'randomcolor';
 
 import classes from './style.css';
-import Avatar from 'components/Avatar';
 
 @inject(stores => ({
+    filter: stores.contacts.filter,
     filtered: stores.contacts.filtered,
     getContats: stores.contacts.getContats,
     showUserinfo: stores.userinfo.toggle,
@@ -19,7 +19,9 @@ export default class Contacts extends Component {
 
         return list.map((e, index) => {
             return (
-                <div className={classes.group} key={index}>
+                <div
+                    className={classes.group}
+                    key={index}>
                     <div className={classes.header}>
                         <label>{e.prefix}</label>
 
@@ -38,16 +40,25 @@ export default class Contacts extends Component {
                         {
                             e.list.map((e, index) => {
                                 return (
-                                    <div className={classes.item} key={index} onClick={() => this.props.showUserinfo(true, e)}>
+                                    <div
+                                        className={classes.item}
+                                        key={index}
+                                        onClick={() => this.props.showUserinfo(true, e)}>
                                         <div className={classes.avatar}>
-                                            <Avatar style={{
-                                                width: 32,
-                                                height: 32,
-                                            }} src={e.HeadImgUrl} />
+                                            <img
+                                                src={e.HeadImgUrl}
+                                                style={{
+                                                    height: 32,
+                                                    width: 32,
+                                                }} />
                                         </div>
                                         <div className={classes.info}>
-                                            <p className={classes.username} dangerouslySetInnerHTML={{__html: e.RemarkName || e.NickName}} />
-                                            <p className={classes.signature} dangerouslySetInnerHTML={{__html: e.Signature || 'No Signature'}} />
+                                            <p
+                                                className={classes.username}
+                                                dangerouslySetInnerHTML={{__html: e.RemarkName || e.NickName}} />
+                                            <p
+                                                className={classes.signature}
+                                                dangerouslySetInnerHTML={{__html: e.Signature || 'No Signature'}} />
                                         </div>
                                     </div>
                                 );
@@ -57,6 +68,10 @@ export default class Contacts extends Component {
                 </div>
             );
         });
+    }
+
+    componentWillMount() {
+        this.props.filter();
     }
 
     render() {

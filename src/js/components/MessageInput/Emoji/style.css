@@ -12,6 +12,9 @@
     visibility: hidden;
 
     & a {
+        margin: 4px;
+        cursor: pointer;
+        zoom: 1.1;
         transition: .2s;
 
         &:hover {
@@ -36,10 +39,9 @@
         bottom: 46px;
         padding: 6px 10px;
 
-        &:global(.qq_face a) {
-            width: 24px;
-            height: 24px;
+        & a {
             margin: 3px;
+            zoom: .9;
         }
     }
 }

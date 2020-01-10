@@ -33,7 +33,7 @@
     width: 100%;
     top: 60px;
     left: 0;
-    height: calc(100vh - 100px - 60px);
+    height: calc(100vh - 100px - 60px); /* Height - Header - Footer - Search input */
     overflow-y: auto;
     overflow-x: hidden;
 
@@ -108,7 +108,6 @@
 
 .signature {
     max-width: 170px;
-    font-family: 'Lucida Grande';
     font-size: 14px;
     color: #9b9b9b;
     overflow: hidden;
@@ -135,7 +134,7 @@
 
     .dropdown {
         top: 46px;
-        height: calc(100vh - 76px - 46px);
+        height: calc(100vh - 86px - 46px);
 
         & header {
             padding: 6px 16px;

@@ -1,5 +1,5 @@
 
-import webpack from 'webpack';
+import MinifyPlugin from 'babel-minify-webpack-plugin';
 import config from './index';
 import baseConfig from './webpack.config.base';
 
@@ -7,7 +7,8 @@ export default {
 
     ...baseConfig,
 
-    devtool: 'source-map',
+    mode: 'production',
+    devtool: false,
 
     entry: [
         'babel-polyfill',
@@ -21,16 +22,7 @@ export default {
 
     plugins: [
         // Minify the output
-        new webpack.optimize.UglifyJsPlugin({
-            compressor: {
-                warnings: false
-            }
-        }),
-
-        // NODE_ENV should be production so that modules do not perform certain development checks
-        new webpack.DefinePlugin({
-            'process.env.NODE_ENV': JSON.stringify('production')
-        }),
+        new MinifyPlugin(),
     ],
 
     // https://github.com/chentsulin/webpack-target-electron-renderer#how-this-module-works

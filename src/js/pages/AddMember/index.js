@@ -17,7 +17,11 @@ import helper from 'utils/helper';
             return addmember.list;
         }
 
-        return contacts.memberList.filter(e => !helper.isChatRoom(e.UserName));
+        return contacts.memberList.filter(
+            e => !helper.isChatRoom(e.UserName)
+                && !helper.isFileHelper(e)
+                && e.UserName !== stores.session.user.User.UserName
+        );
     },
     addMember: async(userids) => {
         var roomid = stores.chat.user.UserName;
@@ -79,7 +83,10 @@ export default class AddMember extends Component {
 
     render() {
         return (
-            <Modal show={this.props.show} fullscreen={true}>
+            <Modal
+                fullscreen={true}
+                onCancel={e => this.close()}
+                show={this.props.show}>
                 <ModalBody className={classes.container}>
                     Add Members
 
@@ -87,7 +94,12 @@ export default class AddMember extends Component {
                         {
                             this.state.selected.map((e, index) => {
                                 var user = this.props.getUser(e);
-                                return <img src={user.HeadImgUrl} key={index} onClick={ev => this.refs.users.removeSelected(e)} />;
+                                return (
+                                    <img
+                                        key={index}
+                                        onClick={ev => this.refs.users.removeSelected(e)}
+                                        src={user.HeadImgUrl} />
+                                );
                             })
                         }
                     </div>
@@ -95,7 +107,11 @@ export default class AddMember extends Component {
                     {this.renderList()}
 
                     <div>
-                        <button onClick={e => this.add(this.state.selected)} disabled={!this.state.selected.length}>Add</button>
+                        <button
+                            disabled={!this.state.selected.length}
+                            onClick={e => this.add(this.state.selected)}>
+                            Add
+                        </button>
 
                         <button onClick={e => this.close()}>Cancel</button>
                     </div>

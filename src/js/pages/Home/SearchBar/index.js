@@ -11,7 +11,7 @@ import classes from './style.css';
     filter: stores.search.filter,
     result: stores.search.result,
     getPlaceholder: () => {
-        stores.contacts.filter();
+        stores.contacts.filter('', true);
         return stores.contacts.filtered.result;
     },
     chat: async(user) => {
@@ -31,11 +31,11 @@ import classes from './style.css';
 export default class SearchBar extends Component {
     timer;
 
-    doFilter(text = '') {
+    filter(text = '') {
         text = text.trim();
 
-        clearTimeout(this.timer);
-        this.timer = setTimeout(() => {
+        clearTimeout(this.filter.timer);
+        this.filter.timer = setTimeout(() => {
             this.props.filter(text);
         }, 300);
     }
@@ -85,6 +85,11 @@ export default class SearchBar extends Component {
     navigation(e) {
         var { result, history, getPlaceholder } = this.props;
 
+        // User press ESC
+        if (e.keyCode === 27) {
+            e.target.blur();
+        }
+
         if (![
             38, // Up
             40, // Down
@@ -116,13 +121,19 @@ export default class SearchBar extends Component {
 
     renderUser(user) {
         return (
-            <div className={classes.user} onClick={e => this.chatTo(user)} data-userid={user.UserName}>
+            <div
+                className={classes.user}
+                onClick={e => this.chatTo(user)} data-userid={user.UserName}>
                 <img src={user.HeadImgUrl} />
 
                 <div className={classes.info}>
-                    <p className={classes.username} dangerouslySetInnerHTML={{__html: user.RemarkName || user.NickName}} />
+                    <p
+                        className={classes.username}
+                        dangerouslySetInnerHTML={{__html: user.RemarkName || user.NickName}} />
 
-                    <span className={classes.signature} dangerouslySetInnerHTML={{__html: user.Signature || 'No Signature'}} />
+                    <span
+                        className={classes.signature}
+                        dangerouslySetInnerHTML={{__html: user.Signature || 'No Signature'}} />
                 </div>
             </div>
         );
@@ -155,7 +166,11 @@ export default class SearchBar extends Component {
                 <header>
                     <h3>History</h3>
 
-                    <a href="" onClick={e => this.props.clear(e)}>CLEAR</a>
+                    <a
+                        href=""
+                        onClick={e => this.props.clear(e)}>
+                        CLEAR
+                    </a>
                 </header>
                 {
                     list.map((e, index) => {
@@ -189,17 +204,19 @@ export default class SearchBar extends Component {
             <div className={classes.container}>
                 <i className="icon-ion-ios-search-strong" />
                 <input
-                    ref="search"
-                    type="text"
-                    placeholder="Search ..."
-                    onKeyUp={e => this.navigation(e)}
-                    onFocus={e => this.doFilter(e.target.value)}
+                    id="search"
                     onBlur={e => this.handleBlur(e.target.value)}
-                    onInput={e => this.doFilter(e.target.value)} />
-
+                    onFocus={e => this.filter(e.target.value)}
+                    onInput={e => this.filter(e.target.value)}
+                    onKeyUp={e => this.navigation(e)}
+                    placeholder="Search ..."
+                    ref="search"
+                    type="text" />
                 {
                     searching && (
-                        <div className={classes.dropdown} ref="dropdown">
+                        <div
+                            className={classes.dropdown}
+                            ref="dropdown">
                             {
                                 !result.query && (history.length ? this.renderHistory(history) : this.renderPlaceholder())
                             }

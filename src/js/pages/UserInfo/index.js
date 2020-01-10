@@ -1,5 +1,6 @@
 
 import React, { Component } from 'react';
+import {withRouter} from 'react-router-dom';
 import { inject, observer } from 'mobx-react';
 import pinyin from 'han';
 import clazz from 'classname';
@@ -35,13 +36,14 @@ import helper from 'utils/helper';
         filter(filtered.query);
     },
     showAddFriend: (user) => stores.addfriend.toggle(true, user),
+    showMessage: stores.snackbar.showMessage,
     isme: () => {
         return stores.session.user
             && stores.userinfo.user.UserName === stores.session.user.User.UserName;
     },
 }))
 @observer
-export default class UserInfo extends Component {
+class UserInfo extends Component {
     state = {
         showEdit: false,
     };
@@ -63,30 +65,39 @@ export default class UserInfo extends Component {
         if (e.charCode !== 13) return;
 
         var value = e.target.value.trim();
-        var result = await this.props.setRemarkName(value, this.props.user.UserName);
+        var res = await this.props.setRemarkName(value, this.props.user.UserName);
 
-        if (result.BaseResponse.Ret === 0) {
+        if (res) {
             this.props.refreshContacts({
                 ...this.props.user,
                 RemarkName: value,
                 RemarkPYInitial: value ? (pinyin.letter(value)[0]).toUpperCase() : value,
             });
             this.toggleEdit(false);
+        } else {
+            this.props.showMessage('Failed to set remark name.');
         }
     }
 
     handleAction(user) {
-        if (user.isFriend || helper.isChatRoom(user.UserName)) {
-            this.props.toggle(false);
-            this.props.chatTo(user.UserName);
-            document.querySelector('#messageInput').focus();
-        } else {
-            this.props.showAddFriend(user);
+        if (this.props.history.location.pathname !== '/') {
+            this.props.history.push('/');
         }
+
+        setTimeout(() => {
+            if (helper.isContact(user) || helper.isChatRoom(user.UserName)) {
+                this.props.toggle(false);
+                this.props.chatTo(user.UserName);
+                document.querySelector('#messageInput').focus();
+            } else {
+                this.props.showAddFriend(user);
+            }
+        });
     }
 
     render() {
-        var { UserName, HeadImgUrl, NickName, RemarkName, Signature, City, Province, isFriend } = this.props.user;
+        var { UserName, HeadImgUrl, NickName, RemarkName, Signature, City, Province } = this.props.user;
+        var isFriend = helper.isContact(this.props.user);
         var pallet = this.props.pallet;
         var isme = this.props.isme();
         var background = pallet[0];
@@ -120,7 +131,9 @@ export default class UserInfo extends Component {
         }
 
         return (
-            <Modal show={this.props.show} onCancel={() => this.handleClose()}>
+            <Modal
+                onCancel={() => this.handleClose()}
+                show={this.props.show}>
                 <ModalBody className={classes.container}>
                     <div
                         className={clazz(classes.hero, {
@@ -141,28 +154,36 @@ export default class UserInfo extends Component {
 
                         {
                             (!isme && isFriend) && (
-                                <div className={classes.edit} onClick={() => this.toggleEdit()}>
+                                <div
+                                    className={classes.edit}
+                                    onClick={() => this.toggleEdit()}>
                                     <i className="icon-ion-edit" />
                                 </div>
                             )
                         }
 
                         <div className={classes.inner}>
-                            <div className={classes.mask} style={{
-                                background: gradient
-                            }} />
+                            <div
+                                className={classes.mask}
+                                style={{
+                                    background: gradient
+                                }} />
                             <Avatar src={HeadImgUrl} />
                         </div>
 
-                        <h3 dangerouslySetInnerHTML={{__html: NickName}} />
+                        <div
+                            className={classes.username}
+                            dangerouslySetInnerHTML={{__html: NickName}} />
 
                         {
                             !this.props.remove ? (
-                                <div>
+                                <div className={classes.wrap}>
                                     <p dangerouslySetInnerHTML={{__html: Signature || 'No Signature'}} />
 
                                     <div className={classes.address}>
-                                        <i className="icon-ion-android-map" style={{ color: fontColor }} />
+                                        <i
+                                            className="icon-ion-android-map"
+                                            style={{ color: fontColor }} />
 
                                         {City || 'UNKNOW'}, {Province || 'UNKNOW'}
                                     </div>
@@ -170,13 +191,13 @@ export default class UserInfo extends Component {
                             ) : (
                                 <div
                                     className={classes.action}
+                                    onClick={() => this.props.removeMember(this.props.user)}
                                     style={{
                                         color: buttonColor,
                                         opacity: .6,
                                         marginTop: 20,
                                         marginBottom: -30,
-                                    }}
-                                    onClick={() => this.props.removeMember(this.props.user)}>
+                                    }}>
                                     Delete
                                 </div>
                             )
@@ -184,11 +205,11 @@ export default class UserInfo extends Component {
 
                         <div
                             className={classes.action}
+                            onClick={() => this.handleAction(this.props.user)}
                             style={{
                                 color: buttonColor,
                                 opacity: .6,
-                            }}
-                            onClick={() => this.handleAction(this.props.user)}>
+                            }}>
                             {helper.isChatRoom(UserName) || isFriend ? 'Send Message' : 'Add Friend'}
                         </div>
                     </div>
@@ -197,12 +218,12 @@ export default class UserInfo extends Component {
                         /* eslint-disable */
                         this.state.showEdit && (
                             <input
-                                type="text"
-                                ref="input"
                                 autoFocus={true}
-                                placeholder="Type the remark name"
                                 defaultValue={RemarkName}
-                                onKeyPress={e => this.handleEnter(e)} />
+                                onKeyPress={e => this.handleEnter(e)}
+                                placeholder="Type the remark name"
+                                ref="input"
+                                type="text" />
                         )
                         /* eslint-enable */
                     }
@@ -211,3 +232,5 @@ export default class UserInfo extends Component {
         );
     }
 }
+
+export default withRouter(UserInfo);

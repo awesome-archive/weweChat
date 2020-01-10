@@ -16,17 +16,21 @@ class Search {
     @observable searching = false;
 
     @action filter(text = '') {
-        var list = contacts.memberList.filter(e => {
-            var res = (e.PYQuanPin + '').toLowerCase().indexOf(pinyin.letter(text.toLocaleLowerCase())) > -1;
-
-            if (e.RemarkPYQuanPin) {
-                res = res || (e.RemarkPYQuanPin + '').toLowerCase().indexOf(pinyin.letter(text.toLocaleLowerCase())) > -1;
-            }
-
-            return (e.isFriend || helper.isChatRoom(e.UserName)) && res;
-        });
+        var list = contacts.memberList;
         var groups = [];
         var friend = [];
+
+        text = pinyin.letter(text.toLocaleLowerCase());
+
+        list = contacts.memberList.filter(e => {
+            var res = pinyin.letter(e.NickName).toLowerCase().indexOf(text) > -1;
+
+            if (e.RemarkName) {
+                res = res || pinyin.letter(e.RemarkName).toLowerCase().indexOf(text) > -1;
+            }
+
+            return res;
+        });
 
         list.map(e => {
             if (helper.isChatRoom(e.UserName)) {

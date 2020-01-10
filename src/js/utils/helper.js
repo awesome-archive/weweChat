@@ -1,12 +1,24 @@
 
-import { remote } from 'electron';
+import { remote, ipcRenderer } from 'electron';
+import axios from 'axios';
+import MD5 from 'browser-md5-file';
+
+import session from '../stores/session';
 
 const CHATROOM_NOTIFY_CLOSE = 0;
 const CONTACTFLAG_NOTIFYCLOSECONTACT = 512;
 const MM_USERATTRVERIFYFALG_BIZ_BRAND = 8;
 const CONTACTFLAG_TOPCONTACT = 2048;
+const CONTACTFLAG_CONTACT = 1;
 
 const helper = {
+    isContact: (user) => {
+        if (helper.isFileHelper(user)) return true;
+
+        return user.ContactFlag & CONTACTFLAG_CONTACT
+            || (session.user && user.UserName === session.user.User.UserName);
+    },
+
     isChatRoom: (userid) => {
         return userid && userid.startsWith('@@');
     },
@@ -26,6 +38,8 @@ const helper = {
     isOfficial: (user) => {
         return !(user.VerifyFlag !== 24 && user.VerifyFlag !== 8 && user.UserName.startsWith('@'));
     },
+
+    isFileHelper: (user) => user.UserName === 'filehelper',
 
     isTop: (user) => {
         if (user.isTop !== void 0) {
@@ -56,11 +70,13 @@ const helper = {
     parseXml: (text, tagName) => {
         var parser = new window.DOMParser();
         var xml = parser.parseFromString(text.replace(/&lt;/g, '<').replace(/&gt;/g, '>'), 'text/xml');
-        var value;
+        var value = {};
 
-        if (tagName) {
-            value = xml.getElementsByTagName(tagName)[0].childNodes[0].nodeValue;
-        }
+        tagName = Array.isArray(tagName) ? tagName : [tagName];
+
+        tagName.map(e => {
+            value[e] = xml.getElementsByTagName(e)[0].childNodes[0].nodeValue;
+        });
 
         return { xml, value };
     },
@@ -86,7 +102,7 @@ const helper = {
         var isChatRoom = helper.isChatRoom(message.FromUserName);
         var content = message.Content;
 
-        if (isChatRoom) {
+        if (isChatRoom && !message.isme) {
             content = message.Content.split(':<br/>')[1];
         }
 
@@ -113,6 +129,7 @@ const helper = {
                 return '[Video]';
 
             case 47:
+            case 49 + 8:
                 // Emoji
                 return '[Emoji]';
 
@@ -132,10 +149,29 @@ const helper = {
         var value = {
             name,
         };
+        var cookies = remote.getCurrentWindow().webContents.session.cookies;
+
+        if (!name) {
+            return new Promise((resolve, reject) => {
+                cookies.get({ url: axios.defaults.baseURL }, (error, cookies) => {
+                    let string = '';
+
+                    if (error) {
+                        return resolve('');
+                    }
+
+                    for (var i = cookies.length; --i >= 0;) {
+                        let item = cookies[i];
+                        string += `${item.name}=${item.value} ;`;
+                    }
+
+                    resolve(string);
+                });
+            });
+        }
 
         return new Promise((resolve, reject) => {
-            var session = remote.getCurrentWindow().webContents.session;
-            session.cookies.get(value, (err, cookies) => {
+            cookies.get(value, (err, cookies) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -215,7 +251,7 @@ const helper = {
     },
 
     // 3 types supported: pic, video, doc
-    getMediaType(ext = '') {
+    getMediaType: (ext = '') => {
         ext = ext.toLowerCase();
 
         switch (true) {
@@ -228,6 +264,42 @@ const helper = {
             default:
                 return 'doc';
         }
+    },
+
+    getDataURL: (src) => {
+        var image = new window.Image();
+
+        return new Promise((resolve, reject) => {
+            image.src = src;
+            image.onload = () => {
+                var canvas = document.createElement('canvas');
+                var context = canvas.getContext('2d');
+
+                canvas.width = image.width;
+                canvas.height = image.height;
+
+                context.drawImage(image, 0, 0, image.width, image.height);
+                resolve(canvas.toDataURL('image/png'));
+            };
+
+            image.onerror = () => {
+                resolve('');
+            };
+        });
+    },
+
+    isOsx: window.process.platform === 'darwin',
+
+    isSuspend: () => {
+        return ipcRenderer.sendSync('is-suspend');
+    },
+
+    md5: (file) => {
+        return new Promise((resolve, reject) => {
+            MD5(file, (err, md5) => {
+                resolve(err ? false : md5);
+            });
+        });
     }
 };
 
